@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/falling-sky/source/pkg/ipv6test"
+	"github.com/oschwald/geoip2-golang"
 )
 
 type server struct {
@@ -22,15 +25,28 @@ type server struct {
 		sync.RWMutex
 		data map[string]ipv6test.RunResult
 	}
+	asnDB *geoip2.Reader
 }
 
 func main() {
-	addr := env("TESTIPV6_ADDR", ":8080")
-	domain := env("TESTIPV6_DOMAIN", "toany.net")
-	lookupDomain := env("TESTIPV6_LOOKUP_DOMAIN", domain)
-	timeout := envDuration("TESTIPV6_TIMEOUT", 15*time.Second)
-	slow := envDuration("TESTIPV6_SLOW", 5*time.Second)
-	packetSize := envInt("TESTIPV6_PACKET_SIZE", 1600)
+	domainDefault := env("TESTIPV6_DOMAIN", "toany.net")
+	lookupDefault := env("TESTIPV6_LOOKUP_DOMAIN", domainDefault)
+	addrFlag := flag.String("addr", env("TESTIPV6_ADDR", ":8080"), "listen address (e.g. :8080)")
+	domainFlag := flag.String("domain", domainDefault, "base domain for test endpoints")
+	lookupFlag := flag.String("lookup-domain", lookupDefault, "lookup domain for ASN endpoints")
+	timeoutFlag := flag.Duration("timeout", envDuration("TESTIPV6_TIMEOUT", 15*time.Second), "per-test timeout")
+	slowFlag := flag.Duration("slow", envDuration("TESTIPV6_SLOW", 5*time.Second), "slow threshold")
+	packetFlag := flag.Int("packet-size", envInt("TESTIPV6_PACKET_SIZE", 1600), "packet size for MTU-style tests")
+	asnFlag := flag.String("asn-db", env("TESTIPV6_ASN_DB", ""), "path to GeoLite2-ASN.mmdb for ASN lookups")
+	flag.Parse()
+
+	addr := *addrFlag
+	domain := *domainFlag
+	lookupDomain := *lookupFlag
+	timeout := *timeoutFlag
+	slow := *slowFlag
+	packetSize := *packetFlag
+	asnPath := *asnFlag
 
 	opts := ipv6test.DefaultOptions()
 	opts.Domain = domain
@@ -44,12 +60,23 @@ func main() {
 		runner: ipv6test.NewRunner(opts),
 	}
 	s.store.data = make(map[string]ipv6test.RunResult)
+	if asnPath != "" {
+		db, err := geoip2.Open(asnPath)
+		if err != nil {
+			log.Printf("asn db load failed (%s): %v", asnPath, err)
+		} else {
+			s.asnDB = db
+			log.Printf("asn db loaded: %s", asnPath)
+		}
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/api/v1/tests/catalog", s.handleCatalog)
 	mux.HandleFunc("/api/v1/tests/run", s.handleRun)
 	mux.HandleFunc("/api/v1/tests/", s.handleGetRun) // /api/v1/tests/{id}
+	mux.HandleFunc("/ip/", s.handleIP)
+	mux.HandleFunc("/ip", s.handleIP)
 
 	log.Printf("testipv6-server listening on %s (domain=%s)", addr, domain)
 	if err := http.ListenAndServe(addr, mux); err != nil {
@@ -150,6 +177,43 @@ func (s *server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// /ip/?callback=?&asn=1 compatible handler.
+func (s *server) handleIP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	q := r.URL.Query()
+	testIP := q.Get("testip")
+	if testIP == "" {
+		testIP, _ = forwardedClient(r)
+	}
+	ipStr, ipType := parseIP(testIP)
+	ipObs := ipv6test.IpObservation{
+		IP:   ipStr,
+		Type: ipType,
+	}
+	if s.asnDB != nil && ipStr != "" {
+		if addr := net.ParseIP(ipStr); addr != nil {
+			if rec, err := s.asnDB.ASN(addr); err == nil {
+				ipObs.ASN = int(rec.AutonomousSystemNumber)
+				ipObs.ASNName = rec.AutonomousSystemOrganization
+			}
+		}
+	}
+
+	body, _ := json.Marshal(ipObs)
+	callback := q.Get("callback")
+	if callback != "" && callback != "?" {
+		w.Header().Set("Content-Type", "application/javascript")
+		fmt.Fprintf(w, "%s(%s);", callback, string(body))
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -203,4 +267,15 @@ func forwardedClient(r *http.Request) (ip string, scheme string) {
 	}
 	host, _, _ := strings.Cut(r.RemoteAddr, ":")
 	return host, scheme
+}
+
+func parseIP(s string) (string, string) {
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return "", "unknown"
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String(), "ipv4"
+	}
+	return ip.String(), "ipv6"
 }
