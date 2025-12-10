@@ -14,7 +14,8 @@ import (
 
 func main() {
 	var (
-		domain   = flag.String("domain", "test-ipv6.com", "Base domain for test endpoints")
+		domain   = flag.String("domain", "toany.net", "Base domain for test endpoints")
+		lookup   = flag.String("lookup-domain", "", "Lookup domain for ASN endpoints (default: same as domain)")
 		timeout  = flag.Duration("timeout", 15*time.Second, "Per-test timeout")
 		slow     = flag.Duration("slow", 5*time.Second, "Slow threshold")
 		packet   = flag.Int("packet-size", 1600, "Packet size for MTU-style tests")
@@ -25,7 +26,11 @@ func main() {
 
 	opts := ipv6test.DefaultOptions()
 	opts.Domain = *domain
-	opts.Endpoints = ipv6test.DefaultEndpoints(*domain, *packet)
+	ld := *lookup
+	if ld == "" {
+		ld = *domain
+	}
+	opts.Endpoints = ipv6test.DefaultEndpoints(*domain, ld, *packet)
 	opts.Timeout = *timeout
 	opts.SlowThreshold = *slow
 	opts.PacketSize = *packet

@@ -18,7 +18,8 @@ type Options struct {
 }
 
 const (
-	defaultDomain        = "test-ipv6.com"
+	defaultDomain        = "toany.net"
+	defaultLookupDomain  = "toany.net"
 	defaultTimeout       = 15 * time.Second
 	defaultSlowThreshold = 5 * time.Second
 	defaultPacketSize    = 1600
@@ -29,7 +30,7 @@ const (
 func DefaultOptions() Options {
 	return Options{
 		Domain:        defaultDomain,
-		Endpoints:     DefaultEndpoints(defaultDomain, defaultPacketSize),
+		Endpoints:     DefaultEndpoints(defaultDomain, defaultLookupDomain, defaultPacketSize),
 		Timeout:       defaultTimeout,
 		SlowThreshold: defaultSlowThreshold,
 		PacketSize:    defaultPacketSize,
@@ -38,10 +39,14 @@ func DefaultOptions() Options {
 }
 
 // DefaultEndpoints constructs URLs similar to the legacy JS.
-func DefaultEndpoints(domain string, packetSize int) map[TestName]string {
+func DefaultEndpoints(domain string, lookupDomain string, packetSize int) map[TestName]string {
 	trimmed := strings.TrimSpace(domain)
 	if trimmed == "" {
 		trimmed = defaultDomain
+	}
+	lkd := strings.TrimSpace(lookupDomain)
+	if lkd == "" {
+		lkd = trimmed
 	}
 	qs := "ip/?callback=?"
 	fill := strings.Repeat("x", packetSize)
@@ -59,7 +64,7 @@ func DefaultEndpoints(domain string, packetSize int) map[TestName]string {
 		TestDualStackMTU:  mkMTU("ds"),
 		TestIPv6MTU:       mkMTU("mtu1280"),
 		TestDNSV6Resolver: mk("ds.v6ns"),
-		TestASNLookupV4:   "https://ipv4.lookup.test-ipv6.com/ip/?callback=?&asn=1",
-		TestASNLookupV6:   "https://ipv6.lookup.test-ipv6.com/ip/?callback=?&asn=1",
+		TestASNLookupV4:   fmt.Sprintf("https://ipv4.lookup.%s/ip/?callback=?&asn=1", lkd),
+		TestASNLookupV6:   fmt.Sprintf("https://ipv6.lookup.%s/ip/?callback=?&asn=1", lkd),
 	}
 }

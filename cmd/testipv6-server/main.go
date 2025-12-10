@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -25,14 +26,15 @@ type server struct {
 
 func main() {
 	addr := env("TESTIPV6_ADDR", ":8080")
-	domain := env("TESTIPV6_DOMAIN", "test-ipv6.com")
+	domain := env("TESTIPV6_DOMAIN", "toany.net")
+	lookupDomain := env("TESTIPV6_LOOKUP_DOMAIN", domain)
 	timeout := envDuration("TESTIPV6_TIMEOUT", 15*time.Second)
 	slow := envDuration("TESTIPV6_SLOW", 5*time.Second)
 	packetSize := envInt("TESTIPV6_PACKET_SIZE", 1600)
 
 	opts := ipv6test.DefaultOptions()
 	opts.Domain = domain
-	opts.Endpoints = ipv6test.DefaultEndpoints(domain, packetSize)
+	opts.Endpoints = ipv6test.DefaultEndpoints(domain, lookupDomain, packetSize)
 	opts.Timeout = timeout
 	opts.SlowThreshold = slow
 	opts.PacketSize = packetSize
@@ -82,6 +84,7 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	clientIP, scheme := forwardedClient(r)
 	var req runRequest
 	if r.Body != nil {
 		defer r.Body.Close()
@@ -109,6 +112,14 @@ func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"code": "run_failed", "message": err.Error()})
 		return
+	}
+
+	if clientIP != "" {
+		result.Results = append(result.Results, ipv6test.TestResult{
+			Name:   "client_info",
+			Status: ipv6test.StatusOK,
+			Notes:  fmt.Sprintf("client_ip=%s scheme=%s", clientIP, scheme),
+		})
 	}
 	s.store.Lock()
 	s.store.data[result.RunID] = result
@@ -169,4 +180,27 @@ func envInt(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// forwardedClient extracts client address and scheme honoring common proxy headers.
+func forwardedClient(r *http.Request) (ip string, scheme string) {
+	scheme = r.Header.Get("X-Forwarded-Proto")
+	if scheme == "" {
+		scheme = r.URL.Scheme
+		if scheme == "" {
+			scheme = "http"
+		}
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff != "" {
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 {
+			return strings.TrimSpace(parts[0]), scheme
+		}
+	}
+	if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
+		return xrip, scheme
+	}
+	host, _, _ := strings.Cut(r.RemoteAddr, ":")
+	return host, scheme
 }
