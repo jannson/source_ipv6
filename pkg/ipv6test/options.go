@@ -26,6 +26,11 @@ const (
 	defaultUserAgent     = "testipv6-go/0.1"
 )
 
+// Domains we control and want to keep under a single wildcard (*.toany.net).
+var wildcardDomains = map[string]struct{}{
+	"toany.net": {},
+}
+
 // DefaultOptions builds a ready-to-use Options.
 func DefaultOptions() Options {
 	return Options{
@@ -48,6 +53,8 @@ func DefaultEndpoints(domain string, lookupDomain string, packetSize int) map[Te
 	if lkd == "" {
 		lkd = trimmed
 	}
+	useWildcard := isWildcardDomain(trimmed)
+	useWildcardLookup := isWildcardDomain(lkd)
 	qs := "ip/?callback=?"
 	fill := strings.Repeat("x", packetSize)
 	mk := func(prefix string) string {
@@ -63,8 +70,30 @@ func DefaultEndpoints(domain string, lookupDomain string, packetSize int) map[Te
 		TestDualStack:     mk("ds"),
 		TestDualStackMTU:  mkMTU("ds"),
 		TestIPv6MTU:       mkMTU("mtu1280"),
-		TestDNSV6Resolver: mk("ds.v6ns"),
-		TestASNLookupV4:   fmt.Sprintf("https://ipv4.lookup.%s/ip/?callback=?&asn=1", lkd),
-		TestASNLookupV6:   fmt.Sprintf("https://ipv6.lookup.%s/ip/?callback=?&asn=1", lkd),
+		TestDNSV6Resolver: mk(v6nsHost(useWildcard)),
+		TestASNLookupV4:   lookupURL("ipv4", lkd, useWildcardLookup, fill),
+		TestASNLookupV6:   lookupURL("ipv6", lkd, useWildcardLookup, fill),
 	}
+}
+
+func v6nsHost(useWildcard bool) string {
+	if useWildcard {
+		// Single-level host fits under *.domain wildcard.
+		return "ds-v6ns"
+	}
+	return "ds.v6ns"
+}
+
+func lookupURL(family string, domain string, useWildcard bool, fill string) string {
+	host := fmt.Sprintf("%s.lookup.%s", family, domain)
+	if useWildcard {
+		host = fmt.Sprintf("%s-lookup.%s", family, domain)
+	}
+	return fmt.Sprintf("https://%s/ip/?callback=?&asn=1", host)
+}
+
+func isWildcardDomain(domain string) bool {
+	d := strings.ToLower(strings.TrimSpace(domain))
+	_, ok := wildcardDomains[d]
+	return ok
 }
