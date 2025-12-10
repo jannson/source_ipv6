@@ -1,0 +1,221 @@
+openapi: 3.0.3
+info:
+  title: IPv6 Test API
+  version: 0.1.0
+  description: |
+    API surface for the new IPv6 testing stack (CLI/server/web). Endpoints cover running tests,
+    retrieving results, and listing available test types. Designed to be served by `cmd/testipv6-server`
+    and consumed by the SPA and CLI.
+servers:
+  - url: /api/v1
+paths:
+  /healthz:
+    get:
+      summary: Liveness check
+      responses:
+        '200':
+          description: Server is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /tests/catalog:
+    get:
+      summary: List supported tests and their intent
+      tags: [tests]
+      responses:
+        '200':
+          description: Catalog of tests the server can execute.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TestDefinition'
+  /tests/run:
+    post:
+      summary: Execute IPv4/IPv6 reachability tests
+      tags: [tests]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunTestsRequest'
+      responses:
+        '200':
+          description: Test run completed (synchronous execution).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTestsResponse'
+        '400':
+          description: Invalid input.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /tests/{runId}:
+    get:
+      summary: Fetch a prior test run by ID
+      tags: [tests]
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test run found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunTestsResponse'
+        '404':
+          description: Run not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  schemas:
+    TestName:
+      type: string
+      description: Logical test identifier.
+      enum:
+        - ipv4_dns          # A-only name reachability
+        - ipv6_dns          # AAAA-only name reachability
+        - dual_stack        # A+AAAA reachability
+        - dual_stack_mtu    # Large packet via dual-stack host
+        - ipv6_mtu          # Large packet via IPv6-only host
+        - dns_v6_resolver   # Resolver can reach IPv6-only auth servers
+        - asn_v4            # ASN lookup over IPv4
+        - asn_v6            # ASN lookup over IPv6
+    TestStatus:
+      type: string
+      enum: [ok, slow, bad, timeout, skipped, error]
+    IpObservation:
+      type: object
+      properties:
+        ip:
+          type: string
+          example: 2001:db8::1
+        type:
+          type: string
+          enum: [ipv4, ipv6, unknown]
+        subtype:
+          type: string
+          description: Tunnel/translation type if detected (e.g., teredo, nat64).
+        via:
+          type: string
+          description: Proxy or Via header if present.
+        asn:
+          type: integer
+          nullable: true
+          example: 4134
+        asnName:
+          type: string
+          nullable: true
+          example: China Telecom Backbone
+      required: [ip, type]
+    TestResult:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/TestName'
+        status:
+          $ref: '#/components/schemas/TestStatus'
+        timeMs:
+          type: integer
+          description: Elapsed time in milliseconds.
+        url:
+          type: string
+          description: Target URL used for the test.
+        packetSizeBytes:
+          type: integer
+          nullable: true
+          description: Payload size for MTU-style tests.
+        ip:
+          $ref: '#/components/schemas/IpObservation'
+        notes:
+          type: string
+          nullable: true
+          description: Optional diagnostic string.
+    TestDefinition:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/TestName'
+        description:
+          type: string
+        category:
+          type: string
+          example: connectivity
+        requiresIPv6:
+          type: boolean
+          description: Whether the target host is IPv6-only.
+        largePayload:
+          type: boolean
+          description: Whether the test uses a ~1600B payload.
+        exampleUrl:
+          type: string
+          description: Representative target URL.
+      required: [name, description]
+    RunTestsRequest:
+      type: object
+      properties:
+        tests:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestName'
+          description: Subset of tests to run; defaults to all if omitted.
+        timeoutMs:
+          type: integer
+          example: 15000
+        slowThresholdMs:
+          type: integer
+          example: 5000
+        packetSizeBytes:
+          type: integer
+          description: Payload size for MTU-related tests; defaults to 1600.
+      additionalProperties: false
+    RunTestsResponse:
+      type: object
+      properties:
+        runId:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+        ipv4:
+          $ref: '#/components/schemas/IpObservation'
+        ipv6:
+          $ref: '#/components/schemas/IpObservation'
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestResult'
+        slowThresholdMs:
+          type: integer
+        timeoutMs:
+          type: integer
+        packetSizeBytes:
+          type: integer
+      required: [runId, startedAt, results]
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string

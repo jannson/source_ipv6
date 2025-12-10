@@ -4,6 +4,11 @@ build::
 	echo
 	echo  DO NOT FORGET TO RUN MAKE UPLOAD
 
+# Build Go binaries for CLI and server
+go-build::
+	GO111MODULE=on CGO_ENABLED=0 go build -o bin/testipv6 ./cmd/testipv6
+	GO111MODULE=on CGO_ENABLED=0 go build -o bin/testipv6-server ./cmd/testipv6-server
+
 beta: build
 	rsync -azv output/. jfesler@cosco.gigo.com:/persist/rsync.gigo.com/fsky/beta/content/.  --exclude site --delete
 	echo 
@@ -44,4 +49,3 @@ icons::
 	ls -l images/favicon.ico
 	convert -delay 5 -size 72 -loop 0 +dither -colors 255  -background white icons/export/falling-sky-icons-spinner/*.png images/hires_spinner.gif
 	ls -l images/hires_spinner.gif
-
