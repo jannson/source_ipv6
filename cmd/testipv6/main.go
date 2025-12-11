@@ -21,6 +21,7 @@ func main() {
 		packet   = flag.Int("packet-size", 1600, "Packet size for MTU-style tests")
 		testsCSV = flag.String("tests", "", "Comma separated test names (default: all)")
 		jsonOut  = flag.Bool("json", false, "Output JSON instead of human readable text")
+		showErrs = flag.Bool("show-errors", false, "Show error details (truncated); default hides error strings for cleaner output")
 	)
 	flag.Parse()
 
@@ -73,9 +74,66 @@ func main() {
 		if tr.IP != nil && tr.IP.IP != "" {
 			fmt.Printf(" ip=%s", tr.IP.IP)
 		}
-		if tr.Error != "" {
-			fmt.Printf(" err=%s", tr.Error)
+		if tr.Error != "" && *showErrs {
+			fmt.Printf(" err=%s", truncateErr(tr.Error))
 		}
 		fmt.Println()
 	}
+
+	analysis := ipv6test.Analyze(result)
+	printScores(analysis)
+	printTokens(analysis.Tokens)
+}
+
+func printScores(a ipv6test.Analysis) {
+	s4 := "n/a"
+	if a.ScoreTransition >= 0 {
+		s4 = fmt.Sprintf("%d/10", a.ScoreTransition)
+	}
+	s6 := "n/a"
+	if a.ScoreStrict >= 0 {
+		s6 = fmt.Sprintf("%d/10", a.ScoreStrict)
+	}
+	fmt.Printf("\nReadiness: IPv4 %s, IPv6 %s (mini %s / %s)\n", s4, s6, a.MiniPrimary, a.MiniSecondary)
+}
+
+func printTokens(tokens []ipv6test.TokenDetail) {
+	if len(tokens) == 0 {
+		return
+	}
+	fmt.Println("Findings:")
+	for _, t := range tokens {
+		marker := markerForColor(t.Color)
+		msg := t.Message
+		if msg == "" {
+			msg = t.Token
+		}
+		if t.MoreInfo != "" {
+			msg = msg + fmt.Sprintf(" [more: %s]", t.MoreInfo)
+		}
+		fmt.Printf("  %s %-18s %s (v4=%d v6=%d)\n", marker, t.Color, msg, t.ScoreIPv4, t.ScoreIPv6)
+	}
+}
+
+func markerForColor(color string) string {
+	switch strings.ToUpper(color) {
+	case "GREEN":
+		return "[OK]"
+	case "BLUE":
+		return "[INFO]"
+	case "ORANGE":
+		return "[WARN]"
+	case "RED":
+		return "[FAIL]"
+	default:
+		return "[INFO]"
+	}
+}
+
+func truncateErr(s string) string {
+	const max = 200
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
